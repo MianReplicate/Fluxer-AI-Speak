@@ -1,4 +1,5 @@
 ﻿using System.Reflection;
+using System.Text.RegularExpressions;
 using Fluxer.Net;
 using Fluxer.Net.Commands;
 using OpenRouter.NET;
@@ -40,7 +41,7 @@ public class Entry
         BotClient = new FluxerClient(_token);
         CommandService = new CommandService();
         AIClient = new OpenRouterClient(_routerKey);
-        AIClient.RegisterTool<Tools.SearchUpCustomEmojiID>();
+        // AIClient.RegisterTool<Tools.SearchUpCustomEmojiID>();
         
         BotClient.Gateway.MessageCreated += async msg =>
         {
@@ -54,9 +55,8 @@ public class Entry
             
             if (!CurrentlyWritingMessage 
                 && !msg.Author.Id.Equals(BotClient.Gateway.CurrentUser.Id)
-                && !msg.ChannelId.Equals(1558317357053509635)
-                // && ((msgReference?.Author.Id.Equals(BotClient.Gateway.CurrentUser.Id) ?? false) || msg.Mentions.Select(user => user.Id).Contains(BotClient.Gateway.CurrentUser.Id)))
-            ){
+                && ((msgReference?.Author.Id.Equals(BotClient.Gateway.CurrentUser.Id) ?? false) || msg.Mentions.Select(user => user.Id).Contains(BotClient.Gateway.CurrentUser.Id)))
+            {
                 try
                 {
                     CurrentlyWritingMessage = true;
@@ -71,9 +71,10 @@ public class Entry
                     } 
                     
                     allMsgs.Add(Message.FromSystem(
-                        $"The following are custom emojis you can use at your disposal, formatted with \"<:EMOJI_NAME:EMOJI_ID:>\" with an 'a' before the first colon if it is animated. USE THE SEARCH EMOJIS TOOL TO GET THE ID. THIS ONLY APPLIES TO CUSTOM SERVER EMOJIS. Normal worldwide standard emojis are formatted normally. Here is a list of CUSTOM SERVER EMOJIS: " 
+                        $"The following are custom emojis you can use at your disposal, " +
+                        $"Here is a list of CUSTOM SERVER EMOJIS: " 
                         + string.Join(", ", msg.Guild.Emojis.Select(emoji => emoji.Value.Name))));
-                    
+                        
                     allMsgs.Add(Message.FromSystem(
                         """
                         System Rules:
@@ -82,7 +83,7 @@ public class Entry
                         - Only respond if someone directly talks to you, asks a question, or if you have a genuinely funny, sarcastic, bratty, or relevant remark to add to the ongoing conversation. 
                         - If the conversation doesn't ncessarily need your input, or if you have nothing fun to add, reply with \"SILENT\"
                         - DO NOT RESPOND OFTEN.
-                        - Use custom server emojis more often rather than standard emojis
+                        - Use custom server emojis more often rather than standard emojis. Format with :EMOJI_NAME:
                         """));
 
                     allMsgs.Add(Message.FromSystem(
@@ -96,7 +97,7 @@ public class Entry
                     allMsgs.Add(FluxerMsgToAIUserMsg(msg));
                     
                     await msg.Channel.TriggerTypingIndicatorAsync();
-                
+                    
                     var request = new ChatCompletionRequest()
                     {
                         Model = Model,
@@ -109,36 +110,39 @@ public class Entry
                         Messages = allMsgs
                     };
                     
-                    // var response = await AIClient.CreateChatCompletionAsync(request);
-
-                    // if (response.HasToolCalls())
-                    // {
-                    //     Console.WriteLine("Tools requested: " + string.Join(", ", response.GetToolCalls().Select(toolCall => toolCall.Function.Name)));
-                    //     foreach (var tool in response.GetToolCalls())
-                    //     {
-                    //         Console.WriteLine(tool.Function.Arguments.ToString());
-                    //         var result = AIClient.ExecuteTool(tool.Function.Name, tool.Function.Arguments);
-                    //         allMsgs.Add(Message.FromTool(result.ToString(), tool.Id));
-                    //     }
-                    //     
-                    //     response = await AIClient.CreateChatCompletionAsync(request);
-                    // }
-                    //
+                    Console.WriteLine($"AI Context: {string.Join("\n", allMsgs.Select(msg => msg.Content))}");
 
                     var response = "";
                     await foreach (var chunk in AIClient.StreamAsync(request))
                     {
                         response += chunk.Raw?.Choices?.FirstOrDefault()?.Delta?.Content;
                     }
+                    
+                    Console.WriteLine("AI Response: " + response);
 
                     if (!response.Contains("SILENT") && !string.IsNullOrWhiteSpace(response))
                     {
+                        foreach(Match match in Regex.Matches(response, ":.*?:"))
+                        {
+                            var old = match.Value;
+                            var emojiName = old.Substring(1, old.Length - 2).ToLower();
+
+                            Emoji emoji = null;
+                            var emojiEnumerable = msg.Guild.Emojis
+                                .Where(emoji => emoji.Value.Name.Equals(emojiName))
+                                .Shuffle();
+                            if (emojiEnumerable.Any())
+                            {
+                                emoji = emojiEnumerable.First().Value;
+                                
+                                response = Regex.Replace(response, old,  emoji.IsAnimated ? $"<a:{emojiName}:{emoji.Id}>" : $"<:{emojiName}:{emoji.Id}>");
+                            }
+                        }
+
                         await msg.Channel.SendMessageAsync(response);
                     }
                     
                     CurrentlyWritingMessage = false;
-                    
-                    Console.WriteLine($"AI Context: {string.Join("\n", allMsgs.Select(msg => msg.Content))}");
                 }
                 catch (Exception e)
                 {

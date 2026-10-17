@@ -1,5 +1,6 @@
 using Fluxer.Net;
 using OpenRouter.NET;
+using OpenRouter.NET.Tools;
 
 namespace Fluxer_AI_Speak;
 

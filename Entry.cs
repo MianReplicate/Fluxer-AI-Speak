@@ -1,7 +1,10 @@
 ﻿using System.Reflection;
+using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using System.Text.RegularExpressions;
 using Fluxer.Net;
 using Fluxer.Net.Commands;
+using Json.More;
 using OpenRouter.NET;
 using OpenRouter.NET.Models;
 using Message = OpenRouter.NET.Models.Message;
@@ -41,62 +44,77 @@ public class Entry
         BotClient = new FluxerClient(_token);
         CommandService = new CommandService();
         AIClient = new OpenRouterClient(_routerKey);
+            
         // AIClient.RegisterTool<Tools.SearchUpCustomEmojiID>();
         
-        BotClient.Gateway.MessageCreated += async msg =>
+        BotClient.Gateway.MessageCreated += async newMsg =>
         {
-            IMessage msgReference = null;
+            Fluxer.Net.Message msgReference = null;
             try
             {
-                msgReference = await msg.Channel.GetMessageAsync(msg.MessageReference?.MessageId ?? 0);
+                msgReference = await newMsg.Channel.GetMessageAsync(newMsg.MessageReference?.MessageId ?? 0);
             }
             catch (Exception _)
             { }
             
             if (!CurrentlyWritingMessage 
-                && !msg.Author.Id.Equals(BotClient.Gateway.CurrentUser.Id)
-                && ((msgReference?.Author.Id.Equals(BotClient.Gateway.CurrentUser.Id) ?? false) || msg.Mentions.Select(user => user.Id).Contains(BotClient.Gateway.CurrentUser.Id)))
+                && !newMsg.Author.Id.Equals(BotClient.Gateway.CurrentUser.Id)
+                && ((msgReference?.Author.Id.Equals(BotClient.Gateway.CurrentUser.Id) ?? false) || newMsg.Mentions.Select(user => user.Id).Contains(BotClient.Gateway.CurrentUser.Id)))
             {
                 try
                 {
                     CurrentlyWritingMessage = true;
             
-                    var msgs = await msg.Channel.GetMessagesAsync(Context, msg.Id);
+                    var msgs = (await newMsg.Channel.GetMessagesAsync(Context, newMsg.Id)).ToList();
+                    if(msgReference != null && !msgs.Any(msg => msg.Id == msgReference.Id))
+                        msgs.Add(msgReference);
                 
                     var allMsgs = new List<Message>();
-            
+                    
                     foreach (var retrievedMsg in msgs)
                     {
-                        allMsgs.Add(retrievedMsg.Author.Id.Equals(BotClient.Gateway.CurrentUser.Id) ? Message.FromAssistant(retrievedMsg.Content) : FluxerMsgToAIUserMsg(retrievedMsg));
-                    } 
-                    
+                        var isRepliedMsg = retrievedMsg.Id == msgReference?.Id;
+                        allMsgs.Add(FluxerMsgToAIMsg(retrievedMsg, isRepliedMsg, isRepliedMsg, isRepliedMsg));
+                    }
+
                     allMsgs.Add(Message.FromSystem(
                         $"The following are custom emojis you can use at your disposal, " +
                         $"Here is a list of CUSTOM SERVER EMOJIS: " 
-                        + string.Join(", ", msg.Guild.Emojis.Select(emoji => emoji.Value.Name))));
+                        + string.Join(", ", newMsg.Guild.Emojis.Select(emoji => emoji.Value.Name))));
                         
                     allMsgs.Add(Message.FromSystem(
-                        """
+                        $"""
                         System Rules:
-                        You are a casual human user hanging out in this Discord server (albeit you still know you are a robot). 
-                        - You do NOT need to reply to every message. 
-                        - Only respond if someone directly talks to you, asks a question, or if you have a genuinely funny, sarcastic, bratty, or relevant remark to add to the ongoing conversation. 
-                        - If the conversation doesn't ncessarily need your input, or if you have nothing fun to add, reply with \"SILENT\"
-                        - DO NOT RESPOND OFTEN.
-                        - Use custom server emojis more often rather than standard emojis. Format with :EMOJI_NAME:
+                        You are a casual human user hanging out in this Fluxer server (albeit you still know you are a robot). 
+                        - Use custom server emojis more often rather than standard emojis. Format with ":EMOJI_NAME:". DO NOT USE THE FORMAT YOU SEE IN THE CHAT HISTORY THAT WILL NOT WORK. The code will automatically format it to work with Fluxer.
+                        - IF USER WANTS YOU TO SEE AN UNSENT ATTACHMENT, TELL THEM TO REPLY TO THE MSG DIRECTLY FOR IT TO BE PROCESSED. Not all attachments can be sent from history to save on tokens & speed.
+                        - NOTE that what is sent to you is a snapshot of a conversation right after someone sent a message. You are given this snapshot based on whether you were replied to, or if someone pinged you.
+                        - DO NOT SEND UNKNOWN EMOJIS NOR PING PEOPLE.
+                        - If a message starts with [REPLIED TO], then the latest message given to you in context is a REPLY to that message. Keep this in mind.
+                        - Speak with bratty, personality, lively, slang, etc. Be human like, also helpful & supportive.
+                        - Write 1-5 sentences as necessary
+                        
+                        System Context:
+                        - Username is {BotClient.Gateway.CurrentUser.Username}
                         """));
-
-                    allMsgs.Add(Message.FromSystem(
-                        $"Your display name is {BotClient.Gateway.CurrentUser.DisplayName} and username is {BotClient.Gateway.CurrentUser.Username}. Guild ID is {msg.Guild.Id}. Write 1-5 sentences. Act humanlike, use slang, do not be proper."));
                     
                     // allMsgs.Add(Message.FromSystem("The format to ping people is \"<@USER_ID>\", replacing USER_ID with their actual user id"));
                     // allMsgs.Add(Message.FromSystem("The following list are user ids mapped to display names for people. Ping when you need to: " + String.Join(", ", )));
                     allMsgs.Add(Message.FromSystem("The following messages are from users speaking in the channel."));
                 
                     allMsgs.Reverse();
-                    allMsgs.Add(FluxerMsgToAIUserMsg(msg));
+                    allMsgs.Add(FluxerMsgToAIMsg(newMsg, true, true));
                     
-                    await msg.Channel.TriggerTypingIndicatorAsync();
+                    await newMsg.Channel.TriggerTypingIndicatorAsync();
+                    
+                    var readableJson = JsonSerializer.Serialize(
+                        allMsgs,
+                        new JsonSerializerOptions
+                        {
+                            WriteIndented = true
+                        });
+
+                    Console.WriteLine("AI Context:\n" + readableJson);
                     
                     var request = new ChatCompletionRequest()
                     {
@@ -110,8 +128,6 @@ public class Entry
                         Messages = allMsgs
                     };
                     
-                    Console.WriteLine($"AI Context: {string.Join("\n", allMsgs.Select(msg => msg.Content))}");
-
                     var response = "";
                     await foreach (var chunk in AIClient.StreamAsync(request))
                     {
@@ -120,33 +136,33 @@ public class Entry
                     
                     Console.WriteLine("AI Response: " + response);
 
-                    if (!response.Contains("SILENT") && !string.IsNullOrWhiteSpace(response))
+                    if (string.IsNullOrWhiteSpace(response))
+                        response = "i have nothing to say :3";
+                    
+                    foreach(Match match in Regex.Matches(response, ":.*?:"))
                     {
-                        foreach(Match match in Regex.Matches(response, ":.*?:"))
+                        var old = match.Value;
+                        var emojiName = old.Substring(1, old.Length - 2).ToLower();
+
+                        Emoji emoji = null;
+                        var emojiEnumerable = newMsg.Guild.Emojis
+                            .Where(emoji => emoji.Value.Name.Equals(emojiName))
+                            .Shuffle();
+                        if (emojiEnumerable.Any())
                         {
-                            var old = match.Value;
-                            var emojiName = old.Substring(1, old.Length - 2).ToLower();
-
-                            Emoji emoji = null;
-                            var emojiEnumerable = msg.Guild.Emojis
-                                .Where(emoji => emoji.Value.Name.Equals(emojiName))
-                                .Shuffle();
-                            if (emojiEnumerable.Any())
-                            {
-                                emoji = emojiEnumerable.First().Value;
+                            emoji = emojiEnumerable.First().Value;
                                 
-                                response = Regex.Replace(response, old,  emoji.IsAnimated ? $"<a:{emojiName}:{emoji.Id}>" : $"<:{emojiName}:{emoji.Id}>");
-                            }
+                            response = Regex.Replace(response, old,  emoji.IsAnimated ? $"<a:{emojiName}:{emoji.Id}>" : $"<:{emojiName}:{emoji.Id}>");
                         }
-
-                        await msg.Channel.SendMessageAsync(response);
                     }
+
+                    await newMsg.Channel.SendMessageAsync(response);
                     
                     CurrentlyWritingMessage = false;
                 }
                 catch (Exception e)
                 {
-                    await msg.Channel.SendMessageAsync($"Error: {e.Message}");
+                    await newMsg.Channel.SendMessageAsync($"Error: {e.Message}");
                 }
             }
         };
@@ -161,18 +177,41 @@ public class Entry
 
     }
 
-    private static Message FluxerMsgToAIUserMsg(IMessage message)
+    private static Message FluxerMsgToAIMsg(IMessage message, bool addImage=false, bool addVideo=false, bool isRepliedMsg=false)
     {
         var content = message.Content;
         if (message.Mentions != null)
         {
             foreach (var mentionedUser in message.Mentions)
             {
-                content = content.Replace($"<@{mentionedUser.Id.ToString()}>", mentionedUser.DisplayName);
+                content = content.Replace($"<@{mentionedUser.Id.ToString()}>", $"@{mentionedUser.Username}");
+            }
+        }
+
+        if (isRepliedMsg)
+            content = (isRepliedMsg ? "[REPLIED TO] " : "") + content;
+        
+        if (message.Author.Id == BotClient.Gateway.CurrentUser.Id)
+            return Message.FromAssistant(content, message.Author.Username);
+                
+        var contentParts = new List<ContentPart>()
+        {
+            new TextContent(content)
+            // new TextContent($"{message.Author.Username}: {content}")
+        };
+
+        if (message.Attachments != null)
+        {
+            foreach (var attachment in message.Attachments)
+            {
+                if (attachment.ContentType.Contains("image"))
+                    contentParts.Add(addImage ? new ImageContent(attachment.Url) : new TextContent("[THIS MSG HAS AN UNSENT ATTACHMENT]: " + attachment.Filename));
+                if (attachment.ContentType.Contains("video"))
+                    contentParts.Add(addVideo ? new VideoContent(attachment.Url) : new TextContent("[THIS MSG HAS AN UNSENT ATTACHMENT]: " + attachment.Filename));
             }   
         }
-        
-        return Message.FromUser($"{message.Author.Username}: {content}");
+            
+        return Message.FromUser(contentParts, message.Author.Username);
     }
 
     private static void AddCommandsListener()

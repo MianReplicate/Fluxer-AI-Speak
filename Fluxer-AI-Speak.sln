@@ -2,6 +2,8 @@
 Microsoft Visual Studio Solution File, Format Version 12.00
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fluxer-AI-Speak", "Fluxer-AI-Speak.csproj", "{C34E1D34-4017-42AA-83F1-E647BCAF7106}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenRouter.NET", "..\OpenRouter.NET\packages\dotnet-sdk\OpenRouter.NET.csproj", "{35FE1AE3-AA5D-4D1B-A806-C4FE97793207}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -13,5 +15,9 @@ Global
 		{C34E1D34-4017-42AA-83F1-E647BCAF7106}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{C34E1D34-4017-42AA-83F1-E647BCAF7106}.Release|Any CPU.Build.0 = Release|Any CPU
 		{C34E1D34-4017-42AA-83F1-E647BCAF7106}.Debug|Any CPU.Deploy.0 = Debug|Any CPU
+		{35FE1AE3-AA5D-4D1B-A806-C4FE97793207}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{35FE1AE3-AA5D-4D1B-A806-C4FE97793207}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{35FE1AE3-AA5D-4D1B-A806-C4FE97793207}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{35FE1AE3-AA5D-4D1B-A806-C4FE97793207}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

@@ -21,7 +21,7 @@ RUN dotnet publish Fluxer-AI-Speak.csproj \
         -p:PublishSingleFile=true \
         -o /app/publish/
 
-FROM ubuntu:24.04 AS runtime
+FROM mcr.microsoft.com/dotnet/runtime:10.0 AS runtime
 
 WORKDIR /app/publish/
 

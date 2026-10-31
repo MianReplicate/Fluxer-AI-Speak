@@ -96,7 +96,7 @@ public class Entry
                     }
                     
                     allMsgs.Add(Message.FromSystem(
-                        $$""""
+                        $"""
                         System Rules:
                         You are a casual human user hanging out in this Fluxer server (albeit you still know you are a robot). 
                         - Use custom server emojis more often rather than standard emojis. Format with ":EMOJI_NAME:". DO NOT USE THE FORMAT YOU SEE IN THE CHAT HISTORY THAT WILL NOT WORK. The code will automatically format it to work with Fluxer.
@@ -119,22 +119,22 @@ public class Entry
                         - Write 1-5 sentences as necessary
                         
                         Current Context:
-                        - Bot Username: {{BotClient.Gateway.CurrentUser.GetCurrentName()}}
-                        - Your Creator: {{(await BotClient.Rest.GetUserAsync((ulong) await BotClient.Gateway.GetOwnerIdAsync())).GetCurrentName()}}
-                        - Members : {{string.Join(", ", 
+                        - Bot Username: {BotClient.Gateway.CurrentUser.GetCurrentName()}
+                        - Your Creator: {(await BotClient.Rest.GetUserAsync((ulong) await BotClient.Gateway.GetOwnerIdAsync())).GetCurrentName()}
+                        - Members : {string.Join(", ", 
                              await Task.WhenAll((await newMsg.Guild.GetMembersAsync()).Select(async member => {
                                  var profile = await member.User.GetProfileAsync();
-                                 return member.GetCurrentName() + $" ({(profile.MemberProfile ?? profile.Profile).Pronouns ?? "They/Them"})";
-                             }) ))}}
-                        - Guild ID: {{newMsg.Guild.Id}}
-                        - Channel ID: {{newMsg.ChannelId}}
-                        - Latest Message ID: {{newMsg.Id}}
+                                 return $"{member.GetCurrentName()} ({(profile.MemberProfile ?? profile.Profile).Pronouns ?? "They/Them"})";
+                             }) ))}
+                        - Guild ID: {newMsg.Guild.Id}
+                        - Channel ID: {newMsg.ChannelId}
+                        - Latest Message ID: {newMsg.Id}
                         
-                        CUSTOM EMOJIS: {{string.Join(", ", newMsg.Guild.Emojis.Select(emoji => emoji.Value.Name))}}
-                        CUSTOM STICKERS: {{string.Join(", ", newMsg.Guild.Stickers.Select(sticker => sticker.Value.Name))}}
+                        CUSTOM EMOJIS: {string.Join(", ", newMsg.Guild.Emojis.Select(emoji => emoji.Value.Name))}
+                        CUSTOM STICKERS: {string.Join(", ", newMsg.Guild.Stickers.Select(sticker => sticker.Value.Name))}
                         
                         The following messages are from users speaking in the channel.
-                        """"));
+                        """));
                     
                     allMsgs.Reverse();
                     allMsgs.Add(FluxerMsgToAIMsg(newMsg, true, true));

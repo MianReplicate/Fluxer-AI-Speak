@@ -12,7 +12,7 @@
     </PropertyGroup>
 
     <ItemGroup>
-      <PackageReference Include="Fluxer.Net" Version="3.8.0" />
+      <PackageReference Include="Fluxer.Net" Version="3.10.1" />
     </ItemGroup>
 
     <ItemGroup>

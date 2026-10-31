@@ -1,12 +1,13 @@
 ﻿using System.Reflection;
 using System.Text.Json;
-using System.Text.Json.Serialization.Metadata;
 using System.Text.RegularExpressions;
 using Fluxer.Net;
 using Fluxer.Net.Commands;
-using Json.More;
+using Fluxer.Net.Rest;
 using OpenRouter.NET;
 using OpenRouter.NET.Models;
+using OpenRouter.NET.Tools;
+using Serilog;
 using Message = OpenRouter.NET.Models.Message;
 
 namespace Fluxer_AI_Speak;
@@ -27,6 +28,8 @@ public class Entry
     private static string _klipyKey = Environment.GetEnvironmentVariable("KLIPY_KEY");
 
     private static bool CurrentlyWritingMessage = false;
+
+    private static HttpClient _httpClient;
     
     public static async Task Main()
     {
@@ -40,12 +43,25 @@ public class Entry
         var success = int.TryParse(Environment.GetEnvironmentVariable("CONTEXT"), out Context);
         if (!success)
             throw new Exception("Failed to parse context!");
-        
-        BotClient = new FluxerClient(_token);
+
+        var logConfig = new LoggerConfiguration()
+            .MinimumLevel
+            .Information()
+            .WriteTo
+            .Console()
+            .CreateLogger();
+        BotClient = new FluxerClient(_token, new FluxerConfig
+        {
+            RestSerilog = logConfig,
+            GatewaySerilog = logConfig
+        });
         CommandService = new CommandService();
         AIClient = new OpenRouterClient(_routerKey);
             
-        // AIClient.RegisterTool<Tools.SearchUpCustomEmojiID>();
+        AIClient.RegisterTool<Tools.AddReactionToMsg>();
+        AIClient.RegisterTool<Tools.GetStickerUrl>();
+
+        _httpClient = new HttpClient();
         
         BotClient.Gateway.MessageCreated += async newMsg =>
         {
@@ -76,32 +92,47 @@ public class Entry
                         var isRepliedMsg = retrievedMsg.Id == msgReference?.Id;
                         allMsgs.Add(FluxerMsgToAIMsg(retrievedMsg, isRepliedMsg, isRepliedMsg, isRepliedMsg));
                     }
-
+                    
                     allMsgs.Add(Message.FromSystem(
-                        $"The following are custom emojis you can use at your disposal, " +
-                        $"Here is a list of CUSTOM SERVER EMOJIS: " 
-                        + string.Join(", ", newMsg.Guild.Emojis.Select(emoji => emoji.Value.Name))));
-                        
-                    allMsgs.Add(Message.FromSystem(
-                        $"""
+                        $$""""
                         System Rules:
                         You are a casual human user hanging out in this Fluxer server (albeit you still know you are a robot). 
                         - Use custom server emojis more often rather than standard emojis. Format with ":EMOJI_NAME:". DO NOT USE THE FORMAT YOU SEE IN THE CHAT HISTORY THAT WILL NOT WORK. The code will automatically format it to work with Fluxer.
+                        - NEVER output raw Discord tag formats like "<:emoji_name:123456789>".
+                        - EXAMPLE BAD: "That's wild <:pepedance:8934758934>"
+                        - EXAMPLE GOOD: "That's wild :pepedance:"
+                        - DO NOT INCLUDE "[REPLIED TO]" in your message!
+                        - Use the toolcalls at your disposal when relevant or when a user would enjoy it.
+                        - EXAMPLE GOOD: User sends a relevant message, run the add_reaction_to_message toolcall to react with a relevant emoji.
+                        - EXAMPLE GOOD 2: User sends a relevant message, run the get_sticker_url toolcall to get the url for a sticker and send it alongside with text if wanted.
+                        - ATTACHMENT URLS RETURNED BY TOOLCALLS ARE NOT TO BE SENT. THE CODE AUTOMATICALLY DOWNLOADS FROM THEM AND ATTACHES THEM TO THE MESSAGE. DO NOT FORMAT STICKERS
+                        - EXAMPLE BAD: ":konqi:" (Konqi is a sticker! IT IS NOT TO BE FORMATTED)
+                        
                         - IF USER WANTS YOU TO SEE AN UNSENT ATTACHMENT, TELL THEM TO REPLY TO THE MSG DIRECTLY FOR IT TO BE PROCESSED. Not all attachments can be sent from history to save on tokens & speed.
                         - NOTE that what is sent to you is a snapshot of a conversation right after someone sent a message. You are given this snapshot based on whether you were replied to, or if someone pinged you.
-                        - DO NOT SEND UNKNOWN EMOJIS NOR PING PEOPLE.
+                        - DO NOT PING PEOPLE.
                         - If a message starts with [REPLIED TO], then the latest message given to you in context is a REPLY to that message. Keep this in mind.
                         - Speak with bratty, personality, lively, slang, etc. Be human like, also helpful & supportive.
                         - Write 1-5 sentences as necessary
                         
-                        System Context:
-                        - Username is {BotClient.Gateway.CurrentUser.Username}
-                        """));
+                        Current Context:
+                        - Bot Username: {{BotClient.Gateway.CurrentUser.GetCurrentName()}}
+                        - Your Creator: {{(await BotClient.Rest.GetUserAsync((ulong) await BotClient.Gateway.GetOwnerIdAsync())).GetCurrentName()}}
+                        - Members : {{string.Join(", ", 
+                             await Task.WhenAll((await newMsg.Guild.GetMembersAsync()).Select(async member => {
+                                 var profile = await member.User.GetProfileAsync();
+                                 return member.GetCurrentName() + $" ({(profile.MemberProfile ?? profile.Profile).Pronouns ?? "They/Them"})";
+                             }) ))}}
+                        - Guild ID: {{newMsg.Guild.Id}}
+                        - Channel ID: {{newMsg.ChannelId}}
+                        - Latest Message ID: {{newMsg.Id}}
+                        
+                        CUSTOM EMOJIS: {{string.Join(", ", newMsg.Guild.Emojis.Select(emoji => emoji.Value.Name))}}
+                        CUSTOM STICKERS: {{string.Join(", ", newMsg.Guild.Stickers.Select(sticker => sticker.Value.Name))}}
+                        
+                        The following messages are from users speaking in the channel.
+                        """"));
                     
-                    // allMsgs.Add(Message.FromSystem("The format to ping people is \"<@USER_ID>\", replacing USER_ID with their actual user id"));
-                    // allMsgs.Add(Message.FromSystem("The following list are user ids mapped to display names for people. Ping when you need to: " + String.Join(", ", )));
-                    allMsgs.Add(Message.FromSystem("The following messages are from users speaking in the channel."));
-                
                     allMsgs.Reverse();
                     allMsgs.Add(FluxerMsgToAIMsg(newMsg, true, true));
                     
@@ -115,6 +146,13 @@ public class Entry
                         });
 
                     Console.WriteLine("AI Context:\n" + readableJson);
+
+                    var tools = new List<Tool>()
+                    {
+                        new() { Type = "openrouter:web_search" },
+                        new() { Type = "openrouter:web_fetch" },
+                    };
+                    tools.AddRange(AIClient.GetTools());
                     
                     var request = new ChatCompletionRequest()
                     {
@@ -125,20 +163,51 @@ public class Entry
                             { "allow_fallbacks", false }
                         },
                         MaxTokens = 1000,
-                        Messages = allMsgs
+                        Messages = allMsgs,
+                        Tools = tools
                     };
                     
                     var response = "";
+                    var serverTools = new List<string>();
+                    var attachments = new List<AttachmentRequest>();
+                    
                     await foreach (var chunk in AIClient.StreamAsync(request))
                     {
                         response += chunk.Raw?.Choices?.FirstOrDefault()?.Delta?.Content;
+
+                        if (chunk.ServerTool?.Result != null)
+                        {
+                            Console.WriteLine("Got result from server tool: " + chunk.ServerTool.Result);
+                            serverTools.Add(chunk.ServerTool.Result.Substring(1, chunk.ServerTool.Result.Length - 2));
+                        }
+                    }
+                    
+                    foreach (var result in serverTools)
+                    {
+                        try
+                        {
+                            Console.WriteLine("Downloading & adding new attachment: " + result);
+
+                            var uri = new Uri(result);
+                            var stream = await _httpClient.GetStreamAsync(uri, new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+                            var attachmentRequest = new AttachmentRequest(stream, result);
+                            
+                            attachments.Add(attachmentRequest);
+                        }
+                        catch (Exception ex)
+                        {
+                            // Network error fallback
+                            Console.WriteLine($"Failed to download sticker image: {ex.Message}");
+                        }
                     }
                     
                     Console.WriteLine("AI Response: " + response);
 
                     if (string.IsNullOrWhiteSpace(response))
                         response = "i have nothing to say :3";
-                    
+
+                    response = Regex.Replace(response, @"<:([a-zA-Z0-9_]+):[0-9]+>", ":$1:");
+                    response = response.Replace("[REPLIED TO]", "");
                     foreach(Match match in Regex.Matches(response, ":.*?:"))
                     {
                         var old = match.Value;
@@ -155,15 +224,15 @@ public class Entry
                             response = Regex.Replace(response, old,  emoji.IsAnimated ? $"<a:{emojiName}:{emoji.Id}>" : $"<:{emojiName}:{emoji.Id}>");
                         }
                     }
-
-                    await newMsg.Channel.SendMessageAsync(response);
                     
-                    CurrentlyWritingMessage = false;
+                    await newMsg.ReplyAsync(response, attachments: attachments);
                 }
                 catch (Exception e)
                 {
                     await newMsg.Channel.SendMessageAsync($"Error: {e.Message}");
                 }
+                
+                CurrentlyWritingMessage = false;
             }
         };
         
@@ -172,19 +241,19 @@ public class Entry
         
         await CommandService.AddModulesAsync(Assembly.GetExecutingAssembly());
         AddCommandsListener();
-
+        
         await Task.Delay(-1);
 
     }
 
     private static Message FluxerMsgToAIMsg(IMessage message, bool addImage=false, bool addVideo=false, bool isRepliedMsg=false)
     {
-        var content = message.Content;
+        var content = Regex.Replace(message.Content, "<a:([^:]+):\\d+>", ":$1:");
         if (message.Mentions != null)
         {
             foreach (var mentionedUser in message.Mentions)
             {
-                content = content.Replace($"<@{mentionedUser.Id.ToString()}>", $"@{mentionedUser.Username}");
+                content = content.Replace($"<@{mentionedUser.Id.ToString()}>", $"@{mentionedUser.GetCurrentName()}");
             }
         }
 
@@ -192,12 +261,11 @@ public class Entry
             content = (isRepliedMsg ? "[REPLIED TO] " : "") + content;
         
         if (message.Author.Id == BotClient.Gateway.CurrentUser.Id)
-            return Message.FromAssistant(content, message.Author.Username);
+            return Message.FromAssistant(content, message.Author.GetCurrentName());
                 
         var contentParts = new List<ContentPart>()
         {
             new TextContent(content)
-            // new TextContent($"{message.Author.Username}: {content}")
         };
 
         if (message.Attachments != null)
@@ -211,7 +279,7 @@ public class Entry
             }   
         }
             
-        return Message.FromUser(contentParts, message.Author.Username);
+        return Message.FromUser(contentParts, message.Author.GetCurrentName());
     }
 
     private static void AddCommandsListener()

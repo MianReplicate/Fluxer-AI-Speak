@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Fluxer.Net;
 using Fluxer.Net.Commands;
 using Fluxer.Net.Rest;
+using Json.More;
 using OpenRouter.NET;
 using OpenRouter.NET.Models;
 using OpenRouter.NET.Tools;
@@ -60,6 +61,7 @@ public class Entry
             
         AIClient.RegisterTool<Tools.AddReactionToMsg>();
         AIClient.RegisterTool<Tools.GetStickerUrl>();
+        AIClient.RegisterTool<Tools.SearchKlipyForGif>();
 
         _httpClient = new HttpClient();
         
@@ -106,6 +108,7 @@ public class Entry
                         - EXAMPLE GOOD: User sends a relevant message, run the add_reaction_to_message toolcall to react with a relevant emoji.
                         - EXAMPLE GOOD 2: User sends a relevant message, run the get_sticker_url toolcall to get the url for a sticker and send it alongside with text if wanted.
                         - ATTACHMENT URLS RETURNED BY TOOLCALLS ARE NOT TO BE SENT. THE CODE AUTOMATICALLY DOWNLOADS FROM THEM AND ATTACHES THEM TO THE MESSAGE. DO NOT FORMAT STICKERS
+                        - KLIPY urls can be sent directly in message
                         - EXAMPLE BAD: ":konqi:" (Konqi is a sticker! IT IS NOT TO BE FORMATTED)
                         
                         - IF USER WANTS YOU TO SEE AN UNSENT ATTACHMENT, TELL THEM TO REPLY TO THE MSG DIRECTLY FOR IT TO BE PROCESSED. Not all attachments can be sent from history to save on tokens & speed.
@@ -137,15 +140,6 @@ public class Entry
                     allMsgs.Add(FluxerMsgToAIMsg(newMsg, true, true));
                     
                     await newMsg.Channel.TriggerTypingIndicatorAsync();
-                    
-                    var readableJson = JsonSerializer.Serialize(
-                        allMsgs,
-                        new JsonSerializerOptions
-                        {
-                            WriteIndented = true
-                        });
-
-                    Console.WriteLine("AI Context:\n" + readableJson);
 
                     var tools = new List<Tool>()
                     {
@@ -159,13 +153,21 @@ public class Entry
                         Model = Model,
                         Provider = new Dictionary<string, object>
                         {
-                            { "order", new[] { Provider } },
-                            { "allow_fallbacks", false }
+                            { "order", new[] { Provider } }
                         },
-                        MaxTokens = 1000,
+                        MaxTokens = 10000,
                         Messages = allMsgs,
                         Tools = tools
                     };
+                    
+                    var readableJson = JsonSerializer.Serialize(
+                        request.ToJsonDocument(),
+                        new JsonSerializerOptions
+                        {
+                            WriteIndented = true
+                        });
+
+                    Console.WriteLine("AI Request:\n" + readableJson);
                     
                     var response = "";
                     var serverTools = new List<string>();

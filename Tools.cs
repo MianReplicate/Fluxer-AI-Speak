@@ -61,4 +61,21 @@ public class Tools
             return "N/A";
         }
     }
+    
+    public class SearchKlipyForGifParams
+    {
+        public string Query { get; set; }
+    }
+    
+    public class SearchKlipyForGif : Tool<SearchKlipyForGifParams, string>
+    {
+        public override string Name => "search_klipy_gif_url";
+        public override string Description => "Queries Klipy for an appropriate gif given a search term and returns the first most relevant result in a url";
+
+        protected override string Handle(SearchKlipyForGifParams parameters)
+        {
+            var result = Task.Run(() => Entry.BotClient.Rest.SearchKlipyAsync(parameters.Query)).GetAwaiter().GetResult();
+            return result.First().Url;
+        }
+    }
 }
